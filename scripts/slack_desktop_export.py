@@ -15,6 +15,13 @@ The JSON day files contain lists of Slack message objects so MemPalace can
 ingest them with:
 
     mempalace mine <output_dir> --mode convos
+
+Security note:
+    This script reads your active Slack desktop session credentials from local
+    macOS resources so it can call https://slack.com/api/* on your behalf:
+      - Slack Safe Storage from macOS Keychain
+      - the encrypted `d` cookie from Slack's Cookies SQLite database
+      - the local `xoxc-` token from Slack's LevelDB files
 """
 
 from __future__ import annotations
@@ -38,10 +45,23 @@ SLACK_APP_DIR = Path.home() / "Library/Application Support/Slack"
 COOKIE_DB = SLACK_APP_DIR / "Cookies"
 LOCAL_STORAGE_DIR = SLACK_APP_DIR / "Local Storage/leveldb"
 DEFAULT_TYPES = ("public_channel", "private_channel", "mpim", "im")
+SAFE_SLUG_RE = re.compile(r"[^A-Za-z0-9_-]+")
+DESCRIPTION = __doc__.split("\n\nSecurity note:", 1)[0]
+SECURITY_EPILOG = """
+Security note:
+  - Reads `Slack Safe Storage` from macOS Keychain via `security find-generic-password`
+  - Opens `~/Library/Application Support/Slack/Cookies` read-only to read the encrypted `d` cookie
+  - Scans `~/Library/Application Support/Slack/Local Storage/leveldb/*.ldb` for the local `xoxc-` token
+  - Uses those credentials only for requests to https://slack.com/api/*
+"""
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__)
+    parser = argparse.ArgumentParser(
+        description=DESCRIPTION,
+        epilog=SECURITY_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     parser.add_argument(
         "--output-dir",
         required=True,
@@ -94,16 +114,23 @@ def slack_safe_storage_key() -> str:
 
 
 def encrypted_cookie_hex(name: str) -> str:
-    with sqlite3.connect(COOKIE_DB) as conn:
-        row = conn.execute(
-            """
-            select hex(encrypted_value)
-            from cookies
-            where host_key = '.slack.com' and name = ?
-            limit 1
-            """,
-            (name,),
-        ).fetchone()
+    cookie_db_uri = f"{COOKIE_DB.resolve().as_uri()}?mode=ro"
+    try:
+        with sqlite3.connect(cookie_db_uri, uri=True) as conn:
+            row = conn.execute(
+                """
+                select hex(encrypted_value)
+                from cookies
+                where host_key = '.slack.com' and name = ?
+                limit 1
+                """,
+                (name,),
+            ).fetchone()
+    except sqlite3.OperationalError as exc:
+        raise RuntimeError(
+            f"Could not read Slack cookie database at {COOKIE_DB}. "
+            "Quit Slack and retry if the database is locked."
+        ) from exc
     if not row or not row[0]:
         raise RuntimeError(f"Could not read Slack cookie '{name}'")
     return row[0]
@@ -131,8 +158,11 @@ def decrypt_chromium_cookie(cookie_hex: str, safe_storage_key: str) -> str:
 
 
 def desktop_token() -> str:
+    ldb_files = sorted(str(path) for path in LOCAL_STORAGE_DIR.glob("*.ldb"))
+    if not ldb_files:
+        raise RuntimeError(f"No .ldb files found in {LOCAL_STORAGE_DIR}")
     proc = subprocess.run(
-        ["strings", *sorted(str(p) for p in LOCAL_STORAGE_DIR.glob("*.ldb"))],
+        ["strings", *ldb_files],
         capture_output=True,
         text=True,
     )
@@ -184,25 +214,28 @@ class SlackSession:
                 if error == "ratelimited":
                     time.sleep(1)
                     continue
+                raise RuntimeError(f"Slack API {method} failed: {error}")
             return payload
 
     def auth_test(self) -> dict:
-        payload = self.api("auth.test")
-        if not payload.get("ok"):
-            raise RuntimeError(f"Slack auth failed: {payload}")
-        return payload
+        return self.api("auth.test")
+
+
+def sanitize_slug(value: str) -> str:
+    slug = SAFE_SLUG_RE.sub("_", value).strip("._")
+    return slug or "unknown"
 
 
 def conversation_slug(conversation: dict) -> str:
     name = conversation.get("name")
     if name:
-        return name
+        return sanitize_slug(name)
     if conversation.get("is_im"):
         user_id = conversation.get("user", "unknown")
-        return f"dm-{user_id.lower()}"
+        return sanitize_slug(f"dm-{user_id.lower()}")
     if conversation.get("is_mpim"):
-        return f"mpim-{conversation['id'].lower()}"
-    return conversation["id"].lower()
+        return sanitize_slug(f"mpim-{conversation['id'].lower()}")
+    return sanitize_slug(conversation["id"].lower())
 
 
 def export_conversations(
@@ -270,7 +303,7 @@ def export_conversations(
                     "limit": 200,
                     "oldest": f"{start_ts:.6f}",
                     "latest": f"{end_ts:.6f}",
-                    "inclusive": "false",
+                    "inclusive": "true",
                 }
                 if history_cursor:
                     history_params["cursor"] = history_cursor
