@@ -470,7 +470,6 @@ def _post_json(url, payload, origin=None):
         return response.status, response.headers, body
 
 
-
 class TestStreamableHTTP:
     def test_rejects_bad_origin(self):
         server, thread, url = _start_http_server()

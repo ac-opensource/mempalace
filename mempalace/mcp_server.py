@@ -959,9 +959,7 @@ READ_ONLY_TOOLS = {
     "mempalace_diary_read",
 }
 
-TOOL_ANNOTATIONS = {
-    tool_name: {"readOnlyHint": True} for tool_name in READ_ONLY_TOOLS
-}
+TOOL_ANNOTATIONS = {tool_name: {"readOnlyHint": True} for tool_name in READ_ONLY_TOOLS}
 TOOL_ANNOTATIONS["mempalace_delete_drawer"] = {
     "readOnlyHint": False,
     "destructiveHint": True,
@@ -1220,7 +1218,9 @@ class StreamableMCPRequestHandler(BaseHTTPRequestHandler):
         if protocol_version:
             self.send_header("MCP-Protocol-Version", protocol_version)
 
-    def _send_bytes(self, status, body=b"", content_type="text/plain; charset=utf-8", protocol=None):
+    def _send_bytes(
+        self, status, body=b"", content_type="text/plain; charset=utf-8", protocol=None
+    ):
         self.send_response(status)
         self._send_common_headers(
             content_type=content_type,
@@ -1334,7 +1334,9 @@ class StreamableMCPRequestHandler(BaseHTTPRequestHandler):
         self._send_json(HTTPStatus.OK, response, protocol=response_protocol)
 
 
-def build_http_server(host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, path=DEFAULT_HTTP_PATH, allowed_origins=None):
+def build_http_server(
+    host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, path=DEFAULT_HTTP_PATH, allowed_origins=None
+):
     return StreamableMCPHTTPServer(
         (host, port),
         StreamableMCPRequestHandler,
@@ -1343,7 +1345,9 @@ def build_http_server(host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, path=DEFAU
     )
 
 
-def run_streamable_http_server(host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, path=DEFAULT_HTTP_PATH, allowed_origins=None):
+def run_streamable_http_server(
+    host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, path=DEFAULT_HTTP_PATH, allowed_origins=None
+):
     server = build_http_server(host=host, port=port, path=path, allowed_origins=allowed_origins)
     logger.info(
         "MemPalace MCP Server starting over streamable HTTP at http://%s:%s%s",
@@ -1353,7 +1357,9 @@ def run_streamable_http_server(host=DEFAULT_HTTP_HOST, port=DEFAULT_HTTP_PORT, p
     )
     logger.info(
         "Allowed origins: %s",
-        ", ".join(sorted(server.allowed_origins)) if server.allowed_origins else "(none configured)",
+        ", ".join(sorted(server.allowed_origins))
+        if server.allowed_origins
+        else "(none configured)",
     )
     try:
         server.serve_forever()
